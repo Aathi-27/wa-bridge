@@ -1,0 +1,16 @@
+{
+  "name": "wa-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "24-hour browser-to-WhatsApp bridge. Design: see README.",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/run-tests.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc.14",
+    "puppeteer-core": "^25.16.0",
+    "qrcode": "^1.5.4"
+  }
+}

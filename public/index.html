@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>WhatsApp bridge</title>
+<style>
+  :root {
+    --violet: #7c3aed;
+    --blue: #2f6bff;
+    --mint: #2dd4a7;
+    --bg: #efeaf9;
+    --ink: #141221;
+    --ink-2: #5b5870;
+    --line: rgba(255, 255, 255, .45);
+    --glass: rgba(255, 255, 255, .55);
+    --glass-strong: rgba(255, 255, 255, .72);
+    --danger: #d1335b;
+    --shadow: 0 20px 60px rgba(40, 30, 90, .18);
+    --highlight: inset 0 1px 0 rgba(255,255,255,.65);
+  }
+  [data-theme="dark"] {
+    --bg: #120c2c;
+    --ink: #f3f1ff;
+    --ink-2: #a8a4cc;
+    --line: rgba(255, 255, 255, .17);
+    --glass: rgba(46, 40, 92, .48);
+    --glass-strong: rgba(52, 46, 100, .72);
+    --danger: #ff6b8a;
+    --shadow: 0 20px 60px rgba(0, 0, 0, .5);
+    --highlight: inset 0 1px 0 rgba(255,255,255,.16);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+    transition: background-color .4s ease, color .4s ease;
+    overflow-x: hidden;
+  }
+
+  /* tricolour blend: three drifting colour fields behind the glass */
+  .blobs { position: fixed; inset: 0; z-index: -1; overflow: hidden; }
+  .blobs i { position: absolute; border-radius: 50%; filter: blur(90px); opacity: .5; }
+  [data-theme="dark"] .blobs i { opacity: .55; }
+  [data-theme="dark"] .blobs i:nth-child(1) { opacity: .7; }
+  .blobs i:nth-child(1) { width: 72vmax; height: 72vmax; left: -16vmax; top: -18vmax; opacity: .62;
+    background: radial-gradient(circle at 35% 35%, var(--violet), transparent 65%);
+    animation: drift1 26s ease-in-out infinite alternate; }
+  .blobs i:nth-child(2) { width: 50vmax; height: 50vmax; right: -14vmax; top: 8vh; opacity: .34;
+    background: radial-gradient(circle at 60% 40%, var(--blue), transparent 65%);
+    animation: drift2 32s ease-in-out infinite alternate; }
+  .blobs i:nth-child(3) { width: 40vmax; height: 40vmax; left: 16vw; bottom: -14vmax; opacity: .2;
+    background: radial-gradient(circle at 50% 50%, var(--mint), transparent 65%);
+    animation: drift3 24s ease-in-out infinite alternate; }
+  @keyframes drift1 { to { transform: translate(9vw, 7vh) scale(1.12); } }
+  @keyframes drift2 { to { transform: translate(-8vw, 10vh) scale(.92); } }
+  @keyframes drift3 { to { transform: translate(6vw, -9vh) scale(1.08); } }
+
+  .glass {
+    background: var(--glass);
+    -webkit-backdrop-filter: blur(22px) saturate(1.5);
+    backdrop-filter: blur(22px) saturate(1.5);
+    border: 1px solid var(--line);
+    box-shadow: var(--highlight), var(--shadow);
+  }
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .glass { background: var(--glass-strong); }
+  }
+
+  .wrap { max-width: 640px; margin: 0 auto; min-height: 100dvh; display: flex; flex-direction: column; }
+  @media (min-width: 701px) {
+    body { padding: 28px 0; }
+    .wrap { min-height: calc(100dvh - 56px); border-radius: 26px; overflow: hidden;
+      background: var(--glass);
+      -webkit-backdrop-filter: blur(26px) saturate(1.5);
+      backdrop-filter: blur(26px) saturate(1.5);
+      border: 1px solid var(--line);
+      box-shadow: var(--highlight), var(--shadow);
+    }
+  }
+  @media (max-width: 700px) {
+    .wrap { background: color-mix(in srgb, var(--glass) 70%, transparent);
+      -webkit-backdrop-filter: blur(20px) saturate(1.5);
+      backdrop-filter: blur(20px) saturate(1.5); }
+  }
+
+  header {
+    display: flex; align-items: center; gap: 10px;
+    padding: calc(12px + env(safe-area-inset-top)) 16px 12px;
+    border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 5;
+    background: color-mix(in srgb, var(--glass) 80%, transparent);
+    -webkit-backdrop-filter: blur(22px) saturate(1.5);
+    backdrop-filter: blur(22px) saturate(1.5);
+  }
+  .logo {
+    width: 34px; height: 34px; border-radius: 11px; flex: none;
+    display: grid; place-items: center;
+    background: linear-gradient(135deg, var(--violet), var(--blue) 55%, var(--mint));
+    color: #fff; font-weight: 800; font-size: 15px;
+    box-shadow: 0 4px 14px color-mix(in srgb, var(--blue) 45%, transparent);
+    transition: transform .25s ease;
+  }
+  .logo:hover { transform: rotate(-6deg) scale(1.06); }
+  header h1 { font-size: 16px; margin: 0; font-weight: 700; letter-spacing: .2px; white-space: nowrap; }
+  header .sub { font-size: 12px; color: var(--ink-2); margin-top: 1px; white-space: nowrap; }
+  header > div:nth-child(2) { min-width: 0; flex: none; }
+  #status {
+    margin-left: auto; font-size: 12px; color: var(--ink-2);
+    padding: 5px 12px; border-radius: 999px;
+    background: var(--glass); border: 1px solid var(--line); box-shadow: var(--highlight);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+  }
+  #themeToggle {
+    border: 1px solid var(--line); background: var(--glass); color: var(--ink);
+    box-shadow: var(--highlight);
+    width: 34px; height: 34px; border-radius: 999px; font-size: 15px; padding: 0;
+    display: grid; place-items: center; cursor: pointer;
+    transition: transform .3s ease, background-color .3s ease;
+  }
+  #themeToggle:hover { transform: rotate(40deg); }
+  @media (max-width: 480px) {
+    header { flex-wrap: wrap; }
+    header .sub { display: none; }
+    #status { order: 3; flex-basis: 100%; margin: 8px 0 0; text-align: center; font-size: 11px; }
+    #status:empty { display: none; }
+  }
+
+  #banner {
+    display: none; margin: 14px 16px 0; padding: 12px 14px; border-radius: 14px;
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+    color: var(--danger); font-size: 14px;
+    border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+    -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+  }
+
+  main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+
+  /* --- sign-in --- */
+  #login {
+    margin: auto; width: min(360px, 100% - 40px); padding: 40px 0;
+    display: flex; flex-direction: column; gap: 14px;
+    animation: rise .45s cubic-bezier(.2,.9,.3,1.2) both;
+  }
+  #login h2 { margin: 0; font-size: 22px; }
+  #login p { margin: 0; color: var(--ink-2); font-size: 14px; }
+  input[type="password"], #text {
+    width: 100%; padding: 13px 14px; font-size: 16px;
+    border: 1px solid var(--line); border-radius: 14px;
+    background: var(--glass-strong); color: var(--ink); outline: none;
+    box-shadow: var(--highlight);
+    transition: border-color .25s ease, box-shadow .25s ease, transform .15s ease;
+  }
+  input:focus-visible {
+    border-color: var(--mint);
+    box-shadow: var(--highlight), 0 0 0 4px color-mix(in srgb, var(--mint) 30%, transparent);
+  }
+  button.primary {
+    padding: 13px 16px; border: 0; border-radius: 14px; cursor: pointer;
+    background: linear-gradient(120deg, #7ee8c7, var(--mint) 55%, #1fb3c2);
+    background-size: 180% 180%; background-position: 0% 50%;
+    color: #053527; font-size: 15px; font-weight: 800; letter-spacing: .2px;
+    box-shadow: 0 6px 18px color-mix(in srgb, var(--mint) 42%, transparent);
+    transition: background-position .5s ease, transform .15s ease, box-shadow .25s ease;
+  }
+  button.primary:hover { background-position: 95% 50%; transform: translateY(-1px);
+    box-shadow: 0 10px 24px color-mix(in srgb, var(--mint) 55%, transparent); }
+  button.primary:active { transform: scale(.97); }
+  #err { color: var(--danger); font-size: 13px; min-height: 16px; }
+
+  /* --- link screen --- */
+  #qr { display: none; padding: 22px 18px 8px; animation: rise .45s cubic-bezier(.2,.9,.3,1.2) both; }
+  .linkcard {
+    border-radius: 22px; padding: 24px 18px; text-align: center;
+    background: var(--glass);
+    -webkit-backdrop-filter: blur(22px) saturate(1.5);
+    backdrop-filter: blur(22px) saturate(1.5);
+    border: 1px solid var(--line);
+    box-shadow: var(--highlight), var(--shadow);
+  }
+  .linkcard h2 {
+    margin: 0 0 4px; font-size: 19px;
+    background: linear-gradient(100deg, var(--violet), var(--blue) 55%, var(--mint));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .linkcard p.hint { margin: 0 0 16px; color: var(--ink-2); font-size: 13.5px; }
+  .qrframe {
+    background: rgba(255,255,255,.92); border-radius: 18px; padding: 14px; display: inline-block;
+    border: 1px solid var(--line);
+    box-shadow: 0 8px 26px color-mix(in srgb, var(--blue) 18%, transparent);
+    transition: transform .3s ease, box-shadow .3s ease;
+  }
+  .qrframe:hover { transform: translateY(-3px) scale(1.015);
+    box-shadow: 0 14px 34px color-mix(in srgb, var(--violet) 24%, transparent); }
+  #qrimg { width: min(220px, 58vw); display: block; }
+  .divider { display: flex; align-items: center; gap: 10px; color: var(--ink-2); font-size: 12px; margin: 18px 4px 12px; }
+  .divider::before, .divider::after { content: ""; flex: 1; height: 1px;
+    background: linear-gradient(90deg, transparent, var(--line), transparent); }
+  #pair { display: none; }
+  #paircode {
+    font-size: clamp(28px, 7vw, 34px); font-weight: 800; letter-spacing: 6px;
+    margin: 4px 0 6px; font-variant-numeric: tabular-nums;
+    background: linear-gradient(100deg, var(--mint), var(--blue) 45%, var(--violet));
+    background-size: 200% 100%;
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    animation: shimmer 3.5s linear infinite;
+  }
+  @keyframes shimmer { to { background-position: 200% 0; } }
+  .code-note { font-size: 12.5px; color: var(--ink-2); margin: 0; }
+
+  /* --- chat --- */
+  #chat {
+    flex: 1; overflow-y: auto; min-height: 0;
+    padding: 18px 14px 10px; display: none; flex-direction: column; gap: 7px;
+  }
+  .msg {
+    max-width: 78%; padding: 9px 13px; font-size: 15px; line-height: 1.4;
+    white-space: pre-wrap; word-break: break-word;
+    border-radius: 17px; animation: pop .28s cubic-bezier(.2,.9,.3,1.25) both;
+    border: 1px solid var(--line);
+    box-shadow: var(--highlight), 0 3px 10px rgba(20, 18, 40, .10);
+    -webkit-backdrop-filter: blur(14px) saturate(1.4);
+    backdrop-filter: blur(14px) saturate(1.4);
+    transition: transform .18s ease, box-shadow .25s ease;
+  }
+  .me {
+    align-self: flex-end; border-bottom-right-radius: 6px;
+    background: linear-gradient(135deg,
+      color-mix(in srgb, var(--mint) 62%, transparent),
+      color-mix(in srgb, var(--blue) 55%, transparent));
+  }
+  .them {
+    align-self: flex-start; border-bottom-left-radius: 6px;
+    background: var(--glass-strong);
+  }
+  [data-theme="dark"] .me {
+    background: linear-gradient(135deg,
+      color-mix(in srgb, var(--mint) 78%, transparent),
+      color-mix(in srgb, var(--blue) 72%, transparent));
+  }
+  @media (hover: hover) {
+    .msg:hover { transform: translateY(-2px);
+      box-shadow: var(--highlight), 0 8px 20px color-mix(in srgb, var(--violet) 18%, transparent); }
+  }
+  .msg:active { transform: scale(.985); }
+  @media (orientation: landscape) and (max-height: 500px) { .msg { max-width: 60%; } }
+
+  #composer {
+    display: none; gap: 8px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--line);
+    background: color-mix(in srgb, var(--glass) 80%, transparent);
+    -webkit-backdrop-filter: blur(22px) saturate(1.5);
+    backdrop-filter: blur(22px) saturate(1.5);
+    position: sticky; bottom: 0;
+  }
+  #composer .primary { border-radius: 14px; padding: 0 18px; }
+
+  @keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+  @keyframes pop { from { opacity: 0; transform: translateY(8px) scale(.96); } to { opacity: 1; transform: none; } }
+  /* short viewports (phone landscape): pin header/composer, scroll the middle */
+  @media (max-height: 560px) {
+    body { padding: 0; }
+    .wrap { min-height: 0; height: 100dvh; max-height: 100dvh; border-radius: 0; }
+    #qr, #login { flex: 1; min-height: 0; overflow-y: auto; }
+    header { padding: calc(8px + env(safe-area-inset-top)) 14px 8px; }
+    .linkcard { padding: 14px 16px; }
+    .linkcard h2 { font-size: 16px; }
+    .linkcard p.hint { margin-bottom: 8px; font-size: 12.5px; }
+    #qr { padding: 10px 14px 6px; }
+    #qrimg { width: min(140px, 36vw); }
+    .qrframe { padding: 10px; }
+    .divider { margin: 10px 4px 8px; }
+    #paircode { font-size: 24px; letter-spacing: 4px; margin: 2px 0 4px; }
+    .code-note { font-size: 11.5px; }
+    #chat { padding: 10px 12px 6px; }
+    #composer { padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); }
+  }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="blobs"><i></i><i></i><i></i></div>
+<div class="wrap">
+  <header>
+    <div class="logo"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" aria-hidden="true">
+      <path fill="#fff" fill-rule="evenodd" d="M12 3.4c-4.8 0-8.6 3.6-8.6 8 0 1.8.7 3.5 1.9 4.8l-1.2 3.8 3.8-1.2c1.2.6 2.6.9 4.1.9 4.8 0 8.6-3.6 8.6-8s-3.8-8.3-8.6-8.3zM9.1 8.4c.2-.2.6-.2.9 0l1 1c.2.2.2.6 0 .8l-.5.5c.5.9 1.2 1.6 2.1 2.1l.5-.5c.2-.2.6-.2.8 0l1 1c.2.2.2.7 0 .9-.6.6-1.4.8-2.1.6-2.5-.7-4.5-2.7-5.2-5.2-.2-.7 0-1.5.6-2.1z" transform="rotate(4 12 12)"/>
+    </svg></div>
+    <div>
+      <h1>WhatsApp bridge</h1>
+      <div class="sub">One chat, relayed to this page</div>
+    </div>
+    <span id="status"></span>
+    <button id="themeToggle" type="button" title="Toggle theme" aria-label="Toggle theme">◐</button>
+  </header>
+  <div id="banner"></div>
+  <main>
+    <div id="qr">
+      <div class="linkcard">
+        <h2>Link your WhatsApp</h2>
+        <p class="hint">WhatsApp &gt; Linked devices &gt; Link a device, then scan. Linking starts the bridge's access window.</p>
+        <div class="qrframe"><img id="qrimg" alt="QR code"></div>
+        <div id="pair">
+          <div class="divider">or link with phone number</div>
+          <p id="paircode"></p>
+          <p class="code-note">In WhatsApp choose "Link with phone number instead" and enter this code. It refreshes every couple of minutes - use the one shown right now.</p>
+        </div>
+      </div>
+    </div>
+    <form id="login">
+      <h2>Sign in</h2>
+      <p>This bridge is private. Enter its password to continue.</p>
+      <input id="pw" type="password" placeholder="Bridge password" autocomplete="current-password">
+      <button class="primary" type="submit">Continue</button>
+      <div id="err"></div>
+    </form>
+    <div id="chat"></div>
+  </main>
+  <form id="composer"><input id="text" placeholder="Message" autocomplete="off"><button class="primary" type="submit">Send</button></form>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+let timer = null;
+
+// theme: stored choice wins, else system; toggle persists. Storage can be
+// unavailable (private modes, locked-down browsers) - never let it break the page.
+const root = document.documentElement;
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} }
+};
+function applyTheme(t) { root.setAttribute('data-theme', t); }
+applyTheme(store.get('bridge-theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+$('themeToggle').addEventListener('click', () => {
+  const next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+  store.set('bridge-theme', next); applyTheme(next);
+});
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+  if (!store.get('bridge-theme')) applyTheme(e.matches ? 'dark' : 'light');
+});
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (r.status === 410) { showExpired((await r.json()).status); throw new Error('expired'); }
+  return r;
+}
+function showExpired(kind) {
+  $('banner').style.display = 'block';
+  $('banner').textContent = kind === 'setup-expired'
+    ? 'The setup window ended before linking. This bridge is closed.'
+    : 'The access window is up. This bridge is closed.';
+  $('chat').style.display = 'none'; $('composer').style.display = 'none'; $('login').style.display = 'none'; $('qr').style.display = 'none';
+}
+async function refresh() {
+  try {
+    const r = await api('/api/messages');
+    if (r.status === 401) { $('login').style.display = 'flex'; return; }
+    const data = await r.json();
+    const linked = !!data.deadline;
+    $('login').style.display = 'none';
+    // pre-link: only the link card. post-link: chat + composer, no link card.
+    $('chat').style.display = linked ? 'flex' : 'none';
+    $('composer').style.display = linked ? 'flex' : 'none';
+    $('status').textContent = linked
+      ? 'expires ' + new Date(data.deadline).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ', ' + new Date(data.deadline).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+      : 'not linked yet';
+    if (linked) {
+      $('chat').innerHTML = '';
+      for (const m of data.messages) {
+        const d = document.createElement('div');
+        d.className = 'msg ' + (m.from === 'me' ? 'me' : 'them');
+        d.textContent = m.text;
+        $('chat').appendChild(d);
+      }
+      $('chat').scrollTop = $('chat').scrollHeight;
+    } else {
+      const q = await (await api('/api/qr')).json();
+      if (q.qr) { $('qr').style.display = 'block'; $('qrimg').src = q.qr; } else { $('qr').style.display = 'none'; }
+      if (q.code) { $('pair').style.display = 'block'; $('paircode').textContent = q.code; } else { $('pair').style.display = 'none'; }
+    }
+  } catch (e) { /* expired already shown, or transient network error */ }
+}
+$('login').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const r = await fetch('/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: $('pw').value }) });
+  if (r.ok) { $('err').textContent = ''; refresh(); } else { $('err').textContent = 'Wrong password.'; }
+});
+$('composer').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const text = $('text').value.trim();
+  if (!text) return;
+  $('text').value = '';
+  await api('/api/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) });
+  refresh();
+});
+refresh();
+// adaptive polling: fast while the page is watched, slow when hidden (24h run volume)
+function arm() { clearInterval(timer); timer = setInterval(refresh, document.visibilityState === 'visible' ? 3000 : 20000); }
+document.addEventListener('visibilitychange', () => { arm(); if (document.visibilityState === 'visible') refresh(); });
+arm();
+</script>
+</body>
+</html>
