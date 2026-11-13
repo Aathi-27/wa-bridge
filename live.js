@@ -5,7 +5,7 @@ import QRCode from 'qrcode';
 
 // Live WhatsApp adapter (Baileys). Links once via QR (WhatsApp > Linked devices).
 // Only the allowed chat JID is ever read from or sent to; everything else is dropped.
-export async function startLive({ state, saveState, messages, saveMessages, allowedJid, dataDir, markActivated, pairingPhone }) {
+export async function startLive({ state, saveState, messages, saveMessages, allowedJid, dataDir, markActivated, pairingPhone, makeSocket = makeWASocket }) {
   if (!allowedJid) throw new Error('ALLOWED_CHAT_JID is required in live mode');
   const authDir = path.join(dataDir, 'auth');
   let { state: authState, saveCreds } = await useMultiFileAuthState(authDir);
@@ -30,28 +30,25 @@ export async function startLive({ state, saveState, messages, saveMessages, allo
   }
   let currentQr = null;
   let currentPairingCode = null;
+  let pairingCodeAt = 0;
+  let lastPairRequestAt = 0;
   let sock = null;
   let linkState = 'connecting';
+  let connGen = 0;
   let down = false;
   let backoff = 1000;
 
   const connect = () => {
-    sock = makeWASocket({ auth: authState });
-    let pairRequested = false;
+    connGen++;
+    linkState = 'connecting';
+    sock = makeSocket({ auth: authState });
     sock.ev.on('creds.update', saveCreds);
     sock.ev.on('connection.update', (u) => {
-      if (u.qr) {
-        currentQr = u.qr;
-        if (pairingPhone && !pairRequested) {
-          pairRequested = true;
-          sock.requestPairingCode(pairingPhone)
-            .then((code) => { currentPairingCode = code; console.log('PAIRING-CODE: ' + code); })
-            .catch((e) => console.log('PAIRING-CODE-ERROR: ' + ((e && e.message) || e)));
-        }
-      }
+      if (u.qr) currentQr = u.qr;
       if (u.connection === 'open') {
         currentQr = null;
         currentPairingCode = null;
+        pairingCodeAt = 0;
         linkState = 'open';
         backoff = 1000;
         resolveChat(); // learn the chat's real JID/LID forms
@@ -60,6 +57,7 @@ export async function startLive({ state, saveState, messages, saveMessages, allo
       if (u.connection === 'close') {
         linkState = 'closed';
         currentPairingCode = null;
+        pairingCodeAt = 0;
         const code = u.lastDisconnect?.error?.output?.statusCode;
         if (code === DisconnectReason.loggedOut) {
           // Session revoked (device unlinked or logged out elsewhere): reset auth
@@ -95,6 +93,26 @@ export async function startLive({ state, saveState, messages, saveMessages, allo
     async send(text) { await sock.sendMessage(sendJid, { text }); },
     async qrDataUrl() { return currentQr ? QRCode.toDataURL(currentQr) : null; },
     pairingCode() { return currentPairingCode; },
+    pairingCodeAt() { return pairingCodeAt; },
+    async requestPairingCode(opts = {}) {
+      // minIntervalMs is in-process only (the HTTP route never passes it): tests shorten it.
+      const minIntervalMs = opts.minIntervalMs ?? 60000;
+      if (!pairingPhone) throw new Error('pairing phone not configured');
+      const current = sock;
+      const gen = connGen;
+      // codes are requestable only while a live connection is in its pairing phase
+      if (down || !current || linkState !== 'connecting') throw new Error('not in pairing state');
+      const waitMs = lastPairRequestAt + minIntervalMs - Date.now();
+      if (waitMs > 0) { const e = new Error('pairing code requested too soon'); e.retryAfter = Math.ceil(waitMs / 1000); throw e; }
+      lastPairRequestAt = Date.now();
+      const code = await current.requestPairingCode(pairingPhone);
+      // any disconnect/reconnect/shutdown while the request was in flight makes its code dead: drop it
+      if (down || current !== sock || gen !== connGen || linkState !== 'connecting') throw new Error('pairing superseded by reconnect');
+      currentPairingCode = code;
+      pairingCodeAt = Date.now();
+      console.log('PAIRING-CODE issued');
+      return code;
+    },
     linkState() { return linkState; },
     async shutdown() {
       down = true;
