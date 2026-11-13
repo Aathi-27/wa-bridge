@@ -211,6 +211,8 @@
   }
   @keyframes shimmer { to { background-position: 200% 0; } }
   .code-note { font-size: 12.5px; color: var(--ink-2); margin: 0; }
+  #getcode { margin-top: 12px; padding: 10px 20px; font-size: 14px; }
+  #getcode:disabled { opacity: .6; cursor: default; }
 
   /* --- chat --- */
   #chat {
@@ -302,11 +304,12 @@
       <div class="linkcard">
         <h2>Link your WhatsApp</h2>
         <p class="hint">WhatsApp &gt; Linked devices &gt; Link a device, then scan. Linking starts the bridge's access window.</p>
-        <div class="qrframe"><img id="qrimg" alt="QR code"></div>
+        <div class="qrframe" id="qrframe"><img id="qrimg" alt="QR code"></div>
         <div id="pair">
           <div class="divider">or link with phone number</div>
           <p id="paircode"></p>
-          <p class="code-note">In WhatsApp choose "Link with phone number instead" and enter this code. It refreshes every couple of minutes - use the one shown right now.</p>
+          <p class="code-note" id="codenote">In WhatsApp choose "Link with phone number instead".</p>
+          <button id="getcode" class="primary" type="button">Get new code</button>
         </div>
       </div>
     </div>
@@ -324,6 +327,7 @@
 <script>
 const $ = (id) => document.getElementById(id);
 let timer = null;
+let lastAutoPairReq = 0; // client cadence for automatic code requests while the link page is watched
 
 // theme: stored choice wins, else system; toggle persists. Storage can be
 // unavailable (private modes, locked-down browsers) - never let it break the page.
@@ -364,6 +368,7 @@ async function refresh() {
     // pre-link: only the link card. post-link: chat + composer, no link card.
     $('chat').style.display = linked ? 'flex' : 'none';
     $('composer').style.display = linked ? 'flex' : 'none';
+    $('qr').style.display = linked ? 'none' : 'block'; // link card must come down once linked
     $('status').textContent = linked
       ? 'expires ' + new Date(data.deadline).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ', ' + new Date(data.deadline).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
       : 'not linked yet';
@@ -378,8 +383,27 @@ async function refresh() {
       $('chat').scrollTop = $('chat').scrollHeight;
     } else {
       const q = await (await api('/api/qr')).json();
-      if (q.qr) { $('qr').style.display = 'block'; $('qrimg').src = q.qr; } else { $('qr').style.display = 'none'; }
-      if (q.code) { $('pair').style.display = 'block'; $('paircode').textContent = q.code; } else { $('pair').style.display = 'none'; }
+      // card is already up pre-link; only the QR image itself may be missing
+      if (q.qr) { $('qrframe').style.display = 'inline-block'; $('qrimg').src = q.qr; } else { $('qrframe').style.display = 'none'; }
+      $('pair').style.display = 'block';
+      if (q.code) {
+        $('paircode').textContent = q.code;
+        const age = q.codeAt ? Math.max(0, Math.round((Date.now() - q.codeAt) / 1000)) : null;
+        $('codenote').textContent = (age != null ? `Generated ${age}s ago. ` : '') + 'Enter it in WhatsApp now - codes expire quickly.';
+      } else {
+        $('paircode').textContent = '';
+        // automatic fresh code only while this tab is actually visible (server enforces 1/min):
+        // the next poll picks it up and keeps it current on screen.
+        if (document.visibilityState === 'visible' && Date.now() - lastAutoPairReq > (window.__PAIR_AUTO_MIN_MS || 60000)) {
+          lastAutoPairReq = Date.now();
+          $('codenote').textContent = 'Getting a fresh code...';
+          api('/api/pair-code', { method: 'POST' }).then(() => refresh()).catch(() => {
+            $('codenote').textContent = 'No active code. Tap "Get new code", then enter it in WhatsApp right away.';
+          });
+        } else {
+          $('codenote').textContent = 'No active code. Tap "Get new code", then enter it in WhatsApp right away.';
+        }
+      }
     }
   } catch (e) { /* expired already shown, or transient network error */ }
 }
@@ -387,6 +411,22 @@ $('login').addEventListener('submit', async (e) => {
   e.preventDefault();
   const r = await fetch('/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: $('pw').value }) });
   if (r.ok) { $('err').textContent = ''; refresh(); } else { $('err').textContent = 'Wrong password.'; }
+});
+$('getcode').addEventListener('click', async () => {
+  $('getcode').disabled = true;
+  try {
+    const r = await api('/api/pair-code', { method: 'POST' });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.code) {
+      $('paircode').textContent = j.code;
+      $('codenote').textContent = 'Fresh code - enter it in WhatsApp right now.';
+    } else if (r.status === 429) {
+      $('codenote').textContent = `One code per minute - wait ${j.retryAfter || 60}s and tap again.`;
+    } else {
+      $('codenote').textContent = 'Could not get a code: ' + (j.error || ('HTTP ' + r.status));
+    }
+  } catch (e) { /* expired banner already shown, or transient error */ }
+  $('getcode').disabled = false;
 });
 $('composer').addEventListener('submit', async (e) => {
   e.preventDefault();

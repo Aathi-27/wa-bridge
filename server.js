@@ -115,6 +115,9 @@ if (MODE === 'live') {
   });
 } else {
   let mockLink = 'mock';
+  let mockPairCode = null, mockPairAt = 0, mockPairReqs = 0;
+  const MOCK_PAIR_MIN_MS = Number(process.env.MOCK_PAIR_MIN_MS || 60000);
+  const MOCK_PAIR_TTL_MS = Number(process.env.MOCK_PAIR_TTL_MS || 0); // 0 = code persists (demo)
   adapter = {
     mockShutdown: false,
     async send(text) {
@@ -135,7 +138,17 @@ if (MODE === 'live') {
       return true;
     },
     async qrDataUrl() { return null; },
-    pairingCode() { return null; },
+    pairingCode() {
+      if (mockPairCode && MOCK_PAIR_TTL_MS && Date.now() - mockPairAt > MOCK_PAIR_TTL_MS) { mockPairCode = null; mockPairAt = 0; }
+      return mockPairCode;
+    },
+    pairingCodeAt() { return mockPairAt; },
+    async requestPairingCode() {
+      const wait = mockPairAt + MOCK_PAIR_MIN_MS - Date.now();
+      if (wait > 0) { const e = new Error('too soon'); e.retryAfter = Math.ceil(wait / 1000); throw e; }
+      mockPairReqs++; mockPairCode = 'MOCKCODE' + mockPairReqs; mockPairAt = Date.now(); return mockPairCode;
+    },
+    pairReqCount() { return mockPairReqs; },
     linkState() { return mockLink; },
     async shutdown() { this.mockShutdown = true; mockLink = 'closed'; },
   };
@@ -188,7 +201,19 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname === '/api/qr' && req.method === 'GET') {
     if (gate(req, res)) return;
-    return send(res, 200, { linked: !!state.activatedAt, qr: await adapter.qrDataUrl(), code: adapter.pairingCode ? adapter.pairingCode() : null });
+    return send(res, 200, { linked: !!state.activatedAt, qr: await adapter.qrDataUrl(), code: adapter.pairingCode ? adapter.pairingCode() : null, codeAt: adapter.pairingCodeAt ? adapter.pairingCodeAt() : null });
+  }
+  if (url.pathname === '/api/pair-code' && req.method === 'POST') {
+    if (gate(req, res)) return;
+    if (typeof adapter.requestPairingCode !== 'function') return send(res, 400, { error: 'pairing codes not supported' });
+    try {
+      const code = await adapter.requestPairingCode();
+      return send(res, 200, { code });
+    } catch (e) {
+      if (e && e.retryAfter) return send(res, 429, { error: 'too soon', retryAfter: e.retryAfter });
+      console.warn('pair-code request failed:', (e && e.message) || e); // server-side detail only
+      return send(res, 502, { error: 'pairing failed, try again' });
+    }
   }
   if (MODE === 'mock' && url.pathname === '/api/mock-activate' && req.method === 'POST') {
     if (gate(req, res)) return;
@@ -202,7 +227,7 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, { stored });
   }
   if (MODE === 'mock' && url.pathname === '/api/mock-state' && req.method === 'GET') {
-    return send(res, 200, { shutdownCalled: !!adapter.mockShutdown, connection: adapter.linkState() });
+    return send(res, 200, { shutdownCalled: !!adapter.mockShutdown, connection: adapter.linkState(), pairReqs: adapter.pairReqCount ? adapter.pairReqCount() : 0 });
   }
   send(res, 404, { error: 'not found' });
 });
